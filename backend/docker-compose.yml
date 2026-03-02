@@ -1,0 +1,44 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: crypto_neo4j
+    ports:
+      - "${DB_PORT}:${DB_PORT}"
+      - "7474:7474"
+    env_file:
+      - .env
+    environment:
+      - NEO4J_AUTH=${DB_USER}/${DB_PASSWORD}
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # api:
+  #   build: .
+  #   container_name: crypto_api
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - "${APP_PORT}:${APP_PORT}"
+  #   depends_on:
+  #     - neo4j
+  #   volumes:
+  #     - ./app:/app
+  #   networks:
+  #     - crypto_network
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  neo4j_plugins:
+
+networks:
+  crypto_network:
+    driver: bridge
