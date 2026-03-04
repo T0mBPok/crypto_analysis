@@ -29,8 +29,26 @@ async def init_neo4j_schema():
             "FOR (t:Ticker) ON (t.symbol)"
         )
         
+        # 🔥 НОВЫЕ ИНДЕКСЫ ДЛЯ КОРРЕЛЯЦИЙ
+        await session.run(
+            "CREATE INDEX correlation_pearson IF NOT EXISTS "
+            "FOR ()-[r:CORRELATED_WITH]-() ON (r.pearson)"
+        )
+        
+        await session.run(
+            "CREATE INDEX correlation_strength IF NOT EXISTS "
+            "FOR ()-[r:CORRELATED_WITH]-() ON (r.strength)"
+        )
+        
+        await session.run(
+            "CREATE INDEX correlation_data_points IF NOT EXISTS "
+            "FOR ()-[r:CORRELATED_WITH]-() ON (r.data_points)"
+        )
+        
         # Индекс для свечей по времени
         await session.run(
             "CREATE INDEX candle_timestamp IF NOT EXISTS "
             "FOR (c:Candle) ON (c.timestamp)"
         )
+        
+        print("✅ Neo4j schema initialized (все индексы созданы)")

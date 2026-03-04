@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from src.ticker.schemas import TickerUpdate, TickerResponse, TickerBase
 from src.ticker.logic import TickerLogic
 
@@ -13,6 +13,14 @@ async def create_tickers_batch(tickers: dict):
 @router.get('/bybit/')
 async def get_from_api(category: str, symbol: str | None = None):
     return await TickerLogic.pull_from_api(category=category, symbol=symbol)
+
+@router.post("/tickers/batch")
+async def add_tickers_batch(
+    request: list[str],  # ["BTCUSDT", "ETHUSDT"]
+    category: str = Query("spot")
+):
+    result = await TickerLogic.add_tickers_with_api(request, category)
+    return result
 
 @router.get("/", response_model=List[TickerResponse])
 async def get_all_tickers():

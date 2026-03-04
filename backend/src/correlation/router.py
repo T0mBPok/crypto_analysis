@@ -1,12 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
-
-from src.correlation.schemas import CorrelationResponse, CorrelationCreate
+from src.correlation.schemas import CorrelationResponse
 from src.correlation.logic import CorrelationLogic
 
 
 router = APIRouter(prefix="/correlations", tags=["Correlations"])
-
 
 @router.post("/calculate", response_model=CorrelationResponse)
 async def calculate_correlation(
@@ -16,9 +14,6 @@ async def calculate_correlation(
     timeframe: int = Query(60, description="Таймфрейм в минутах"),
     days: int = Query(30, description="Количество дней для расчета")
 ):
-    """
-    Рассчитывает корреляцию между двумя тикерами и сохраняет в Neo4j
-    """
     try:
         correlation = await CorrelationLogic.calculate_pair_correlation(
             symbol1=symbol1,
@@ -33,6 +28,31 @@ async def calculate_correlation(
     except Exception as e:
         raise HTTPException(500, f"Ошибка при расчете корреляции: {e}")
 
+@router.post("/all-tickers")
+async def calculate_all_tickers_correlations(
+    category: str = Query("spot", description="Категория (spot/futures)"),
+    timeframe: int = Query(60, description="Таймфрейм в минутах"),
+    days: int = Query(30, description="Количество дней"),
+    max_tickers: int = Query(50, description="Макс. количество тикеров (для perf)")
+):
+    """
+    🧠 Рассчитывает корреляции для ВСЕХ тикеров в Neo4j БД!
+    
+    Запускает полный анализ графа криптовалют.
+    Сохраняет все пары в Neo4j как отношения CORRELATED_WITH.
+    
+    ⚠️  Время: N*(N-1)/2 запросов (50 тикеров = ~1225 пар)
+    """
+    try:
+        result = await CorrelationLogic.calculate_all_tickers_correlations(
+            category=category,
+            timeframe=timeframe,
+            days=days,
+            max_tickers=max_tickers
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка полного анализа: {e}")
 
 @router.post("/batch", response_model=List[CorrelationResponse])
 async def calculate_batch(
@@ -57,6 +77,18 @@ async def calculate_batch(
     except Exception as e:
         raise HTTPException(500, f"Ошибка при пакетном расчете: {e}")
 
+@router.get("/all", response_model=List[CorrelationResponse])
+async def get_all_correlations(
+    limit: Optional[int] = Query(None),
+    threshold: float = Query(0.0, ge=0, le=1),
+    strength: Optional[str] = Query(None, pattern="^(STRONG|MODERATE|WEAK)$"),
+    sort_by: str = Query("pearson", pattern="^(pearson|data_points|calculated_at)$")
+):
+    correlations = await CorrelationLogic.get_all_correlations(
+        limit=limit, threshold=threshold, strength_filter=strength,
+        sort_by=sort_by
+    )
+    return [CorrelationResponse.model_validate(c) for c in correlations]
 
 @router.get("/{symbol}", response_model=List[CorrelationResponse])
 async def get_correlations_for_symbol(
@@ -83,70 +115,6 @@ async def get_correlation_between(
         raise HTTPException(404, f"Корреляция между {symbol1} и {symbol2} не найдена")
     
     return CorrelationResponse.model_validate(correlation)
-
-
-@router.get("/strong/all", response_model=List[CorrelationResponse])
-async def get_strong_correlations(
-    threshold: float = Query(0.7, ge=0, le=1, description="Порог силы корреляции")
-):
-    """
-    Возвращает все сильные корреляции в базе
-    """
-    correlations = await CorrelationLogic.get_strong_correlations(threshold)
-    return [CorrelationResponse.model_validate(c) for c in correlations]
-
-
-@router.get("/find/with/{symbol}", response_model=List[dict])
-async def find_correlated(
-    symbol: str,
-    threshold: float = Query(0.7, ge=0, le=1, description="Порог корреляции"),
-    timeframe: int = Query(60, description="Таймфрейм в минутах"),
-    days: int = Query(30, description="Количество дней для расчета"),
-    recalculate: bool = Query(False, description="Пересчитать даже если есть в БД")
-):
-    """
-    Находит тикеры, коррелирующие с заданным
-    """
-    try:
-        results = await CorrelationLogic.find_correlated_with(
-            symbol=symbol,
-            threshold=threshold,
-            timeframe=timeframe,
-            days=days,
-            recalculate=recalculate
-        )
-        return results
-    except Exception as e:
-        raise HTTPException(500, f"Ошибка при поиске корреляций: {e}")
-
-
-@router.get("/matrix", response_model=dict)
-async def get_correlation_matrix(
-    symbols: str,
-    timeframe: int = Query(60, description="Таймфрейм в минутах"),
-    days: int = Query(30, description="Количество дней для расчета")
-):
-    """
-    Возвращает матрицу корреляций для списка символов (символы через запятую)
-    
-    Пример: /correlations/matrix?symbols=BTCUSDT,ETHUSDT,SOLUSDT
-    """
-    symbol_list = [s.strip() for s in symbols.split(",")]
-    
-    if len(symbol_list) < 2:
-        raise HTTPException(400, "Нужно минимум 2 символа для матрицы")
-    
-    try:
-        matrix = await CorrelationLogic.get_correlation_matrix(
-            symbols=symbol_list,
-            category="spot",
-            timeframe=timeframe,
-            days=days
-        )
-        return matrix
-    except Exception as e:
-        raise HTTPException(500, f"Ошибка при построении матрицы: {e}")
-
 
 @router.delete("/{symbol1}/{symbol2}")
 async def delete_correlation(

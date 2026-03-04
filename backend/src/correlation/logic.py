@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import HTTPException
 from datetime import datetime
 from typing import List, Dict
@@ -10,12 +12,43 @@ from src.services.correlations import calculate_correlation
 
 
 class CorrelationLogic(CorrelationDAO):
-    
     def convert_neo4j_datetime(value):
         """Преобразует Neo4j DateTime в Python datetime"""
         if isinstance(value, Neo4jDateTime):
             return value.to_native()
         return value
+
+    @classmethod
+    async def _preload_all_prices(
+        cls,
+        symbols: List[str],
+        category: str,
+        timeframe: int,
+        days: int,
+        batch_size: int = 10
+    ) -> Dict[str, List[float]]:
+        """Загружает ВСЕ цены параллельно с батчингом"""
+        prices_cache = {}
+        
+        # Батчи для API (Bybit лимит)
+        for i in range(0, len(symbols), batch_size):
+            batch = symbols[i:i+batch_size]
+            tasks = [
+                cls._get_prices_for_calculation(s, category, timeframe, days)
+                for s in batch
+            ]
+            
+            batch_prices = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for symbol, prices in zip(batch, batch_prices):
+                if isinstance(prices, Exception):
+                    print(f"❌ Нет данных для {symbol}: {prices}")
+                else:
+                    prices_cache[symbol] = prices
+            
+            print(f"📥 Загружено {len(batch)} тикеров: {batch[:3]}...")
+        
+        return prices_cache
 
     @classmethod
     async def _get_prices_for_calculation(
@@ -129,6 +162,82 @@ class CorrelationLogic(CorrelationDAO):
         return saved
     
     @classmethod
+    async def calculate_all_tickers_correlations(
+        cls,
+        category: str = "spot",
+        timeframe: int = 60,
+        days: int = 30,
+        max_tickers: int = 50,
+        batch_size: int = 10,  # Параллельно пар
+        semaphore_limit: int = 20  # Защита API
+    ) -> Dict:
+        """🚀 Полный граф ВСЕ↔ВСЕ с батчингом + async"""
+        
+        # 1. Тикеры
+        all_tickers = await TickerLogic.find_all(limit=max_tickers)
+        symbols = [t.symbol for t in all_tickers]
+        total_pairs = len(symbols) * (len(symbols) - 1) // 2
+        
+        print(f"🕸️ {len(symbols)} тикеров → {total_pairs} пар")
+        
+        # 2. **КЭШ ЦЕН** (самая большая оптимизация!)
+        prices_cache = await cls._preload_all_prices(symbols, category, timeframe, days)
+        
+        # 3. Генерируем ВСЕ пары (A↔B, но не B↔A)
+        pairs = [(symbols[i], symbols[j]) for i in range(len(symbols)) 
+                for j in range(i + 1, len(symbols))]
+        
+        # 4. АСИНХРОННЫЙ БАТЧИНГ
+        semaphore = asyncio.Semaphore(semaphore_limit)
+        results = []
+        
+        async def process_pair(pair):
+            async with semaphore:
+                s1, s2 = pair
+                if s1 not in prices_cache or s2 not in prices_cache or len(prices_cache[s1]) < 20:
+                    return None
+                
+                # Быстрый расчет из кэша (0.01с вместо 2с)
+                min_len = min(len(prices_cache[s1]), len(prices_cache[s2]))
+                result = calculate_correlation(prices_cache[s1][-min_len:], prices_cache[s2][-min_len:])
+                
+                corr = Correlation(
+                    symbol1=s1, symbol2=s2,
+                    pearson=result['price_correlation'],
+                    spearman=result['rank_correlation'],
+                    returns_corr=result['returns_correlation'],
+                    strength="STRONG" if abs(result['price_correlation']) > 0.7 else 
+                            "MODERATE" if abs(result['price_correlation']) > 0.4 else "WEAK",
+                    calculated_at=datetime.now(),
+                    data_points=min_len
+                )
+                return await cls.create_or_update(corr)
+        
+        # 5. БАТЧИ по batch_size
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i:i + batch_size]
+            print(f"⚡ Батч {i//batch_size + 1}/{(len(pairs)-1)//batch_size + 1} ({len(batch)} пар)")
+            
+            batch_results = await asyncio.gather(
+                *[process_pair(p) for p in batch],
+                return_exceptions=True
+            )
+            
+            valid_results = [r for r in batch_results if not isinstance(r, Exception) and r]
+            results.extend(valid_results)
+            print(f"✅ {len(valid_results)}/{len(batch)} сохранено")
+        
+        # Статистика
+        strong = len([r for r in results if abs(r.pearson) > 0.7])
+        
+        return {
+            "status": "full_graph_completed",
+            "tickers": len(symbols),
+            "pairs_processed": len(results),
+            "strong": strong
+        }
+    
+    @classmethod
     async def calculate_all_pairs(
         cls,
         symbols: List[str],
@@ -166,6 +275,28 @@ class CorrelationLogic(CorrelationDAO):
                 current += 1
         
         return results
+    
+    @classmethod
+    async def get_all_correlations(
+        cls,
+        limit: None | int = None,
+        threshold: float = 0.0,
+        strength_filter: None | str = None,
+        sort_by: str = "pearson"
+    ) -> List[Correlation]:
+        correlations = await cls.get_all(  # cls наследует от DAO
+            limit=limit,
+            threshold=threshold,
+            strength_filter=strength_filter,
+            sort_by=sort_by
+        )
+        
+        # Только конвертация datetime
+        for corr in correlations:
+            if corr.calculated_at:
+                corr.calculated_at = cls.convert_neo4j_datetime(corr.calculated_at)
+        
+        return correlations
     
     @classmethod
     async def find_correlated_with(

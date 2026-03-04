@@ -3,7 +3,7 @@ from scipy import stats
 
 def calculate_correlation(prices1: list, prices2: list):
     if prices1 == None or prices2 == None:
-        raise Exception("Ошибка подлкючения к API bybit")
+        raise Exception("Ошибка подлкючения к API")
     
     # 1 Пирсон
     pearson = np.corrcoef(prices1, prices2)[0, 1]

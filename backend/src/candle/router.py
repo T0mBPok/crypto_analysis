@@ -7,6 +7,23 @@ from src.candle.logic import CandleLogic
 
 router = APIRouter(prefix="/candles", tags=["Candles"])
 
+@router.post("/batch/all", response_model=dict)
+async def pull_all_tickers_candles(
+    category: str = Query("spot", pattern="^(spot|linear)$"),
+    timeframe: int = Query(60, ge=1, le=1440),
+    days: int = Query(4, ge=1, le=30),
+    max_tickers: int = Query(50, ge=10, le=100),
+    semaphore_limit: int = Query(10, ge=5, le=25, description="Параллельные запросы к API")
+):
+    result = await CandleLogic.pull_all_tickers_candles(
+        category=category,
+        timeframe=timeframe,
+        days=days,
+        max_tickers=max_tickers,
+        semaphore_limit=semaphore_limit
+    )
+    return result
+
 @router.get("/{symbol}/", response_model=list[CandleResponse])
 async def get_candles(
     symbol: str,

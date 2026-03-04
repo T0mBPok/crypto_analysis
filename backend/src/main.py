@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_swagger_ui_theme import setup_swagger_ui_theme
 import uvicorn
 from contextlib import asynccontextmanager
 
@@ -11,6 +12,7 @@ from src.exceptions import TokenExpiredException, TokenNoFoundException
 from src.ticker.router import router as tickers_router
 from src.candle.router import router as candles_router
 from src.correlation.router import router as correlations_router
+from src.graph.router import router as graph_router
 
 
 @asynccontextmanager
@@ -36,8 +38,11 @@ app = FastAPI(
     title='Crypto Analysis',
     description='API для анализа корреляций криптовалют с Neo4j',
     version='1.0.0',
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None
 )
+
+setup_swagger_ui_theme(app, docs_path="/docs")
 
 # CORS middleware
 app.add_middleware(
@@ -45,18 +50,21 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000", 
         "http://127.0.0.1:3000",
-        "http://localhost:5173",  # Vite default
-        "http://127.0.0.1:5173"
-    ],  
+        "http://localhost:5173", 
+        "http://127.0.0.1:5173",
+        "http://localhost:5174"  
+    ], 
     allow_credentials=True,
-    allow_methods=["*"],  
-    allow_headers=["*"],  
+    allow_methods=["*"], 
+    allow_headers=["*"],
+    allow_origin_regex="http://localhost:\\d+"
 )
 
 # Подключаем роутеры
 app.include_router(tickers_router)
 app.include_router(candles_router)
 app.include_router(correlations_router)
+app.include_router(graph_router)
 
 
 # Обработчики исключений
